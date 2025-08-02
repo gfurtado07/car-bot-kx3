@@ -62,20 +62,20 @@ bot.on('message', async (ctx) => {
       return;
     }
 
-    // 6. Loop até completar - CORREÇÃO AQUI!
+    // 6. Loop até completar - BUGS CORRIGIDOS!
     let completed = false;
     let attempts = 0;
-    const maxAttempts = 20; // Reduzido para 10 segundos
+    const maxAttempts = 20;
 
     while (!completed && attempts < maxAttempts) {
       attempts++;
       
       try {
-        // ✅ CORREÇÃO: Parâmetros na ordem correta (threadId, runId)
-        const status = await openai.beta.threads.runs.retrieve(thread.id, run.id);
-        console.log(`🔄 Status: ${status.status} (tentativa ${attempts})`);
+        // ✅ CORREÇÃO 1: Usar 'runStatus' em vez de 'status'
+        const runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+        console.log(`🔄 Status: ${runStatus.status} (tentativa ${attempts})`);
         
-        if (status.status === 'completed') {
+        if (runStatus.status === 'completed') {
           const messages = await openai.beta.threads.messages.list(thread.id);
           const response = messages.data[0]?.content[0]?.text?.value;
           if (response) {
@@ -87,18 +87,19 @@ bot.on('message', async (ctx) => {
           completed = true;
         }
         
-        else if (status.status === 'requires_action') {
+        else if (runStatus.status === 'requires_action') {
           console.log(`⚙️ Executando function calls...`);
-          await functionsRouter(thread.id, run.id, status.required_action);
+          // ✅ CORREÇÃO 2: Usar 'runStatus' e executar functionsRouter
+          await functionsRouter(thread.id, run.id, runStatus.required_action);
         }
         
-        else if (status.status === 'failed') {
-          console.error(`❌ Run falhou:`, status.last_error);
-          await ctx.reply(`⚠️ Erro: ${status.last_error?.message || 'Falha no processamento'}`);
+        else if (runStatus.status === 'failed') {
+          console.error(`❌ Run falhou:`, runStatus.last_error);
+          await ctx.reply(`⚠️ Erro: ${runStatus.last_error?.message || 'Falha no processamento'}`);
           completed = true;
         }
         
-        else if (status.status === 'expired') {
+        else if (runStatus.status === 'expired') {
           console.error(`⏰ Run expirou`);
           await ctx.reply('⚠️ Processamento expirou. Tente novamente.');
           completed = true;
@@ -167,8 +168,3 @@ startBot();
 
 // Para webhook futuro
 export const handler = bot.webhookCallback('/telegram');
-
-
-
-
-
