@@ -20,7 +20,7 @@ bot.on('message', async (ctx) => {
   if (ctx.message.text === '/start') return;
 
   try {
-    log('Nova mensagem recebida', {
+    log('📩 Nova mensagem recebida', {
       user: ctx.from.id,
       message: ctx.message.text || '[arquivo/mídia]'
     });
@@ -31,19 +31,18 @@ bot.on('message', async (ctx) => {
       attachmentLinks = await uploadAttachments(ctx);
     }
 
-    // Nome sugerido do Telegram
     const telegramName = `${ctx.from.first_name} ${ctx.from.last_name || ''}`.trim();
-
-    // Montar conteúdo principal
     let messageContent = ctx.message.text || 'Arquivo enviado';
+
     if (attachmentLinks.length > 0) {
       messageContent += `\n\n[Anexos: ${attachmentLinks.map(a => a.name).join(', ')}]`;
     }
+
     if (ctx.message.voice) {
-      messageContent += `\n\n[Áudio enviado - file_id: ${ctx.message.voice.file_id}]`;
+      messageContent += `\n\n[Áudio enviado – file_id: ${ctx.message.voice.file_id}]`;
     }
 
-    // Criar thread
+    // Criar thread OpenAI
     const thread = await openai.beta.threads.create();
 
     await openai.beta.threads.messages.create(thread.id, {
@@ -57,7 +56,7 @@ bot.on('message', async (ctx) => {
       attachments: attachmentLinks || []
     });
 
-    // 🛡️ Protege a chamada ao Assistant com try/catch
+    // Iniciar rodagem do assistant
     let run;
     try {
       run = await openai.beta.threads.runs.create(thread.id, {
@@ -65,50 +64,59 @@ bot.on('message', async (ctx) => {
         tools: [{ type: 'function' }],
         model: 'gpt-4o-mini'
       });
-    } catch (error) {
-      console.error('❌ Erro ao iniciar run com OpenAI:', error);
-      await ctx.reply('⚠️ Erro ao processar com a inteligência do bot. Tente novamente em alguns instantes.');
+    } catch (err) {
+      console.error('❌ Erro ao iniciar run com OpenAI:', err);
+      await ctx.reply('⚠️ Erro ao processar com a inteligência do bot. Tente novamente daqui a pouco.');
       return;
     }
 
+    // Processamento do run
     let completed = false;
     let lastResponse = null;
 
     while (!completed) {
-      const result = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+      const status = await openai.beta.threads.runs.retrieve(thread.id, run.id);
 
-      if (result.status === 'completed') {
+      if (status.status === 'completed') {
         const messages = await openai.beta.threads.messages.list(thread.id);
         lastResponse = messages.data?.[0] || null;
         completed = true;
       }
 
-      if (result.status === 'requires_action') {
-        await functionsRouter(thread.id, run.id, result.required_action);
+      if (status.status === 'requires_action') {
+        try {
+          console.log(`⚙️ Executando função: ${status.required_action?.function_call?.name}`);
+          await functionsRouter(thread.id, run.id, status.required_action);
+        } catch (err) {
+          console.error('❌ Erro ao executar função chamada pelo Assistant:', err);
+          await ctx.reply('❌ Ocorreu um erro interno ao processar sua solicitação. Nossa equipe já foi notificada.');
+          return;
+        }
       }
 
       await new Promise((res) => setTimeout(res, 600));
     }
 
+    // Enviar resposta final para o usuário
     if (lastResponse) {
-      const replyText = lastResponse.content?.[0]?.text?.value || '[Sem resposta útil]';
+      const replyText = lastResponse.content?.[0]?.text?.value || '[Resposta vazia do assistente]';
       await ctx.reply(replyText);
     }
 
   } catch (error) {
-    console.error('❌ Erro geral:', error);
+    console.error('❌ Erro inesperado geral:', error);
 
     if (error.status === 500) {
       await ctx.reply('⚠️ O servidor está temporariamente indisponível. Tente novamente em alguns minutos.');
     } else if (error.status === 429) {
-      await ctx.reply('⚠️ Muitas requisições em pouco tempo. Aguarde alguns segundos.');
+      await ctx.reply('⚠️ Muitas requisições em pouco tempo. Aguarde alguns segundos e tente de novo.');
     } else {
       await ctx.reply('❌ Desculpe, ocorreu um erro inesperado. Tente novamente.');
     }
   }
 });
 
-// Sempre usar polling para evitar conflitos (409 error)
+// Polling ativo por padrão
 const launchOptions = {
   polling: {
     timeout: 10,
@@ -128,8 +136,8 @@ async function startBot() {
   }
 }
 
-// Force somente polling, sem webhook
 startBot();
 
-// Export (apenas se usar webhook em outros ambientes)
+// Exporta webhook opcional
 export const handler = bot.webhookCallback('/telegram');
+
