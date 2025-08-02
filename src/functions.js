@@ -64,12 +64,15 @@ export async function functionsRouter(threadId, runId, requiredAction) {
 async function addUserEmail({ telegram_id, email }) {
   const client = await pool.connect();
   try {
+    // Extrair nome do email para uso futuro
+    const nameFromEmail = email.split('@')[0];
+    
     await client.query(`
-      INSERT INTO users (telegram_id, email) 
-      VALUES ($1, $2) 
+      INSERT INTO users (telegram_id, email, name) 
+      VALUES ($1, $2, $3) 
       ON CONFLICT (telegram_id) 
-      DO UPDATE SET email = $2
-    `, [telegram_id, email]);
+      DO UPDATE SET email = $2, name = $3
+    `, [telegram_id, email, nameFromEmail]);
     
     return { success: true, message: 'Email cadastrado com sucesso!' };
   } finally {
@@ -78,16 +81,46 @@ async function addUserEmail({ telegram_id, email }) {
 }
 
 async function getDepartments() {
-  // Lista fixa de departamentos - você pode mover para o banco depois
-  return {
-    departments: [
-      { name: 'TI - Tecnologia da Informação', email: 'ti@kx3.com.br' },
-      { name: 'RH - Recursos Humanos', email: 'rh@kx3.com.br' },
-      { name: 'Financeiro', email: 'financeiro@kx3.com.br' },
-      { name: 'Comercial', email: 'comercial@kx3.com.br' },
-      { name: 'Suporte Técnico', email: 'suporte@kx3.com.br' }
-    ]
-  };
+  try {
+    const { GoogleSpreadsheet } = await import('google-spreadsheet');
+    const { JWT } = await import('google-auth-library');
+    
+    const serviceAccountAuth = new JWT({
+      email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+      key: process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+
+    const doc = new GoogleSpreadsheet(process.env.GOOGLE_SHEET_ID, serviceAccountAuth);
+    await doc.loadInfo();
+    
+    const departmentSheet = doc.sheetsByTitle['DEPARTAMENTOS'];
+    if (!departmentSheet) {
+      throw new Error('Aba DEPARTAMENTOS não encontrada');
+    }
+    
+    const rows = await departmentSheet.getRows();
+    const departments = rows.map(row => ({
+      name: row.get('Departamentos da empresa') || row._rawData[0],
+      email: row.get('lista de e-mails do departamento para os quais o bot deve enviar o e-mail de abertura do chamado') || row._rawData[1]
+    })).filter(dept => dept.name && dept.email);
+    
+    log('Departamentos carregados da planilha:', departments);
+    
+    return { departments };
+  } catch (error) {
+    logError(error, 'Erro ao buscar departamentos da planilha');
+    // Fallback para lista fixa
+    return {
+      departments: [
+        { name: 'TI - Tecnologia da Informação', email: 'ti@kx3.com.br' },
+        { name: 'RH - Recursos Humanos', email: 'rh@kx3.com.br' },
+        { name: 'Financeiro', email: 'financeiro@kx3.com.br' },
+        { name: 'Comercial', email: 'comercial@kx3.com.br' },
+        { name: 'Suporte Técnico', email: 'suporte@kx3.com.br' }
+      ]
+    };
+  }
 }
 
 async function openTicket({ telegram_id, department, subject, description, attachments = [] }) {
@@ -105,6 +138,8 @@ async function openTicket({ telegram_id, department, subject, description, attac
     // Gerar protocolo único
     const protocol = `CAR${Date.now().toString().slice(-6)}`;
     
+    log(`Criando ticket com protocolo: ${protocol}`);
+    
     // Salvar ticket no banco
     const ticketResult = await client.query(`
       INSERT INTO tickets (protocol, user_id, department, subject, description, attachments, status)
@@ -113,46 +148,61 @@ async function openTicket({ telegram_id, department, subject, description, attac
     `, [protocol, user.id, department, subject, description, JSON.stringify(attachments)]);
     
     const ticket = ticketResult.rows[0];
+    log(`Ticket salvo no banco:`, ticket);
     
     // Adicionar à planilha
-    await addTicketToSheet({
-      protocol,
-      user_name: 'Representante', // ou pegar nome real se tiver
-      email: user.email,
-      department,
-      subject,
-      description,
-      status: 'Aberto',
-      attachment_links: attachments.map(a => a.url).join(', ')
-    });
+    try {
+      await addTicketToSheet({
+        protocol,
+        user_name: user.name || 'Representante',
+        email: user.email,
+        department,
+        subject,
+        description,
+        status: 'Aberto',
+        attachment_links: attachments.map(a => a.url).join(', ') || 'Nenhum'
+      });
+      log(`Ticket adicionado à planilha: ${protocol}`);
+    } catch (sheetError) {
+      logError(sheetError, 'Erro ao adicionar ticket à planilha');
+    }
     
     // Enviar email para o departamento
-    const deptList = await getDepartments();
-    const deptInfo = deptList.departments.find(d => d.name === department);
-    
-    if (deptInfo) {
-      const emailHtml = `
-        <h2>Novo Chamado - Protocolo: ${protocol}</h2>
-        <p><strong>De:</strong> ${user.email}</p>
-        <p><strong>Departamento:</strong> ${department}</p>
-        <p><strong>Assunto:</strong> ${subject}</p>
-        <p><strong>Descrição:</strong></p>
-        <p>${description.replace(/\n/g, '<br>')}</p>
-        ${attachments.length > 0 ? `
-          <p><strong>Anexos:</strong></p>
-          <ul>
-            ${attachments.map(a => `<li><a href="${a.url}">${a.name}</a></li>`).join('')}
-          </ul>
-        ` : ''}
-        <hr>
-        <p><em>Para responder, reply este email. O usuário será notificado automaticamente.</em></p>
-      `;
+    try {
+      const deptList = await getDepartments();
+      const deptInfo = deptList.departments.find(d => d.name === department);
       
-      await sendMail({
-        to: deptInfo.email,
-        subject: `[${protocol}] ${subject}`,
-        html: emailHtml
-      });
+      if (deptInfo && deptInfo.email) {
+        const emailHtml = `
+          <h2>Novo Chamado - Protocolo: ${protocol}</h2>
+          <p><strong>De:</strong> ${user.email}</p>
+          <p><strong>Nome:</strong> ${user.name || 'Não informado'}</p>
+          <p><strong>Departamento:</strong> ${department}</p>
+          <p><strong>Assunto:</strong> ${subject}</p>
+          <p><strong>Descrição:</strong></p>
+          <p>${description.replace(/\n/g, '<br>')}</p>
+          ${attachments.length > 0 ? `
+            <p><strong>Anexos:</strong></p>
+            <ul>
+              ${attachments.map(a => `<li><a href="${a.url}">${a.name}</a></li>`).join('')}
+            </ul>
+          ` : ''}
+          <hr>
+          <p><em>Para responder, reply este email. O usuário será notificado automaticamente.</em></p>
+        `;
+        
+        await sendMail({
+          to: deptInfo.email,
+          subject: `[${protocol}] ${subject}`,
+          html: emailHtml
+        });
+        
+        log(`Email enviado para: ${deptInfo.email}`);
+      } else {
+        log(`Departamento não encontrado ou sem email: ${department}`);
+      }
+    } catch (emailError) {
+      logError(emailError, 'Erro ao enviar email');
     }
     
     return {
@@ -161,6 +211,11 @@ async function openTicket({ telegram_id, department, subject, description, attac
       message: `Chamado criado com sucesso!\n\nProtocolo: ${protocol}\nDepartamento: ${department}\n\nVocê receberá atualizações por aqui quando houver resposta.`
     };
     
+  } catch (error) {
+    logError(error, 'Erro geral na criação do ticket');
+    return {
+      error: 'Erro interno ao criar chamado. Tente novamente.'
+    };
   } finally {
     client.release();
   }
