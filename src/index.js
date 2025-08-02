@@ -61,8 +61,7 @@ bot.on('message', async (ctx) => {
     try {
       run = await openai.beta.threads.runs.create(thread.id, {
         assistant_id: process.env.OPENAI_ASSISTANT_ID,
-        tools: [{ type: 'function' }],
-        model: 'gpt-4.1-mini'
+        tools: [{ type: 'function' }]
       });
     } catch (err) {
       console.error('❌ Erro ao iniciar run com OpenAI:', {
