@@ -45,16 +45,28 @@ bot.on('message', async (ctx) => {
     // Criar thread OpenAI
     const thread = await openai.beta.threads.create();
 
-    await openai.beta.threads.messages.create(thread.id, {
-      role: 'user',
-      content: messageContent,
-      metadata: {
-        telegram_id: ctx.from.id.toString(),
-        telegram_name: telegramName,
-        file_id: ctx.message.voice?.file_id || null
-      },
-      attachments: attachmentLinks || []
-    });
+    const payload = {
+  role: 'user',
+  content: messageContent
+};
+
+// Adiciona metadata apenas se definido com valores válidos
+const metadata = {
+  telegram_id: ctx.from.id?.toString(),
+  telegram_name: telegramName
+};
+if (ctx.message.voice?.file_id) {
+  metadata.file_id = ctx.message.voice.file_id;
+}
+payload.metadata = metadata;
+
+// Não adiciona attachments se estiver vazio
+if (attachmentLinks.length > 0) {
+  payload.attachments = attachmentLinks;
+}
+
+await openai.beta.threads.messages.create(thread.id, payload);
+
 
     // Iniciar execução com Assistant
     let run;
