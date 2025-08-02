@@ -25,16 +25,16 @@ bot.on('message', async (ctx) => {
       message: ctx.message.text || '[arquivo/mídia]'
     });
 
-    // Upload de anexos, se houver
+    // Upload de anexos
     let attachmentLinks = [];
     if (ctx.message.document || ctx.message.photo) {
       attachmentLinks = await uploadAttachments(ctx);
     }
 
-    // Identificação nome sugerido
+    // Nome sugerido do Telegram
     const telegramName = `${ctx.from.first_name} ${ctx.from.last_name || ''}`.trim();
 
-    // Preparar mensagem
+    // Montar conteúdo principal
     let messageContent = ctx.message.text || 'Arquivo enviado';
     if (attachmentLinks.length > 0) {
       messageContent += `\n\n[Anexos: ${attachmentLinks.map(a => a.name).join(', ')}]`;
@@ -43,7 +43,7 @@ bot.on('message', async (ctx) => {
       messageContent += `\n\n[Áudio enviado - file_id: ${ctx.message.voice.file_id}]`;
     }
 
-    // Criar thread no OpenAI
+    // Criar thread
     const thread = await openai.beta.threads.create();
 
     await openai.beta.threads.messages.create(thread.id, {
@@ -57,12 +57,19 @@ bot.on('message', async (ctx) => {
       attachments: attachmentLinks || []
     });
 
-    // Iniciar run com function calling habilitado
-    const run = await openai.beta.threads.runs.create(thread.id, {
-      assistant_id: process.env.OPENAI_ASSISTANT_ID,
-      tools: [{ type: 'function' }],
-      model: 'gpt-4o-mini'
-    });
+    // 🛡️ Protege a chamada ao Assistant com try/catch
+    let run;
+    try {
+      run = await openai.beta.threads.runs.create(thread.id, {
+        assistant_id: process.env.OPENAI_ASSISTANT_ID,
+        tools: [{ type: 'function' }],
+        model: 'gpt-4o-mini'
+      });
+    } catch (error) {
+      console.error('❌ Erro ao iniciar run com OpenAI:', error);
+      await ctx.reply('⚠️ Erro ao processar com a inteligência do bot. Tente novamente em alguns instantes.');
+      return;
+    }
 
     let completed = false;
     let lastResponse = null;
@@ -94,14 +101,14 @@ bot.on('message', async (ctx) => {
     if (error.status === 500) {
       await ctx.reply('⚠️ O servidor está temporariamente indisponível. Tente novamente em alguns minutos.');
     } else if (error.status === 429) {
-      await ctx.reply('⚠️ Muitas requisições em pouco tempo. Aguarde um momento e tente novamente.');
+      await ctx.reply('⚠️ Muitas requisições em pouco tempo. Aguarde alguns segundos.');
     } else {
       await ctx.reply('❌ Desculpe, ocorreu um erro inesperado. Tente novamente.');
     }
   }
 });
 
-// Inicialização normal (polling)
+// Sempre usar polling para evitar conflitos (409 error)
 const launchOptions = {
   polling: {
     timeout: 10,
@@ -112,21 +119,17 @@ const launchOptions = {
 
 async function startBot() {
   try {
-    console.log('🚀 Iniciando CAR BOT...');
+    console.log('🚀 Iniciando CAR BOT (modo polling)...');
     await bot.launch(launchOptions);
-    console.log('✅ Bot iniciado com sucesso!');
+    console.log('✅ Bot iniciado com sucesso via polling!');
   } catch (err) {
     console.error('Erro ao iniciar o bot:', err);
     process.exit(1);
   }
 }
 
-// Produção vs Dev
-if (process.env.NODE_ENV === 'production') {
-  startBot();
-} else {
-  startBot(); // pode manter igual por usar polling sempre
-}
+// Force somente polling, sem webhook
+startBot();
 
-// Export handler para compatibilidade (Render webhook, se necessário)
+// Export (apenas se usar webhook em outros ambientes)
 export const handler = bot.webhookCallback('/telegram');
