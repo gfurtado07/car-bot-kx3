@@ -184,8 +184,25 @@ async function startBot() {
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
+// Iniciar em desenvolvimento
 if (process.env.NODE_ENV !== 'production') {
   startBot();
+}
+
+// Para produção - iniciar servidor HTTP com webhook
+if (process.env.NODE_ENV === 'production') {
+  import('express').then(({ default: express }) => {
+    const app = express();
+    app.use(express.json());
+    app.post('/telegram', bot.webhookCallback('/telegram'));
+    app.get('/', (req, res) => res.send('CAR Bot está rodando! 🤖'));
+    
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => {
+      console.log(`✅ Servidor rodando na porta ${PORT}`);
+      console.log(`🤖 Bot configurado para receber webhooks em /telegram`);
+    });
+  });
 }
 
 export const handler = bot.webhookCallback('/telegram');
