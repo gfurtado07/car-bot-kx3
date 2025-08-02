@@ -58,30 +58,31 @@ bot.on('message', async (ctx) => {
       console.log(`⚙️ Run criado: ${run.id}`);
     } catch (runError) {
       console.error('❌ Erro ao criar run:', runError);
-      await ctx.reply('⚠️ Erro ao ativar assistente. Verifique se o OPENAI_ASSISTANT_ID está correto.');
+      await ctx.reply('⚠️ Erro ao ativar assistente. Verifique configurações.');
       return;
     }
 
-    // 6. Loop até completar
+    // 6. Loop até completar - CORREÇÃO AQUI!
     let completed = false;
     let attempts = 0;
-    const maxAttempts = 30; // 15 segundos máximo
+    const maxAttempts = 20; // Reduzido para 10 segundos
 
     while (!completed && attempts < maxAttempts) {
       attempts++;
       
       try {
+        // ✅ CORREÇÃO: Parâmetros na ordem correta (threadId, runId)
         const status = await openai.beta.threads.runs.retrieve(thread.id, run.id);
-        console.log(`🔄 Status do run (tentativa ${attempts}): ${status.status}`);
+        console.log(`🔄 Status: ${status.status} (tentativa ${attempts})`);
         
         if (status.status === 'completed') {
           const messages = await openai.beta.threads.messages.list(thread.id);
           const response = messages.data[0]?.content[0]?.text?.value;
           if (response) {
-            console.log(`💬 Resposta do Agent: ${response.substring(0, 100)}...`);
+            console.log(`💬 Resposta recebida (${response.length} chars)`);
             await ctx.reply(response);
           } else {
-            await ctx.reply('⚠️ Assistente não retornou resposta. Tente novamente.');
+            await ctx.reply('⚠️ Assistente não retornou resposta.');
           }
           completed = true;
         }
@@ -93,22 +94,21 @@ bot.on('message', async (ctx) => {
         
         else if (status.status === 'failed') {
           console.error(`❌ Run falhou:`, status.last_error);
-          await ctx.reply('⚠️ Erro no processamento. Tente novamente.');
+          await ctx.reply(`⚠️ Erro: ${status.last_error?.message || 'Falha no processamento'}`);
           completed = true;
         }
         
         else if (status.status === 'expired') {
-          console.error(`⏰ Run expirou após ${attempts} tentativas`);
-          await ctx.reply('⚠️ Processamento demorou demais. Tente novamente.');
+          console.error(`⏰ Run expirou`);
+          await ctx.reply('⚠️ Processamento expirou. Tente novamente.');
           completed = true;
         }
         
       } catch (statusError) {
-        console.error(`❌ Erro ao verificar status (tentativa ${attempts}):`, statusError);
-        if (attempts >= maxAttempts) {
-          await ctx.reply('⚠️ Erro persistente. Tente novamente em alguns minutos.');
-          completed = true;
-        }
+        console.error(`❌ Erro ao verificar status:`, statusError.message);
+        await ctx.reply('⚠️ Erro no processamento. Tente novamente.');
+        completed = true;
+        break;
       }
       
       if (!completed) {
@@ -117,45 +117,55 @@ bot.on('message', async (ctx) => {
     }
 
     if (attempts >= maxAttempts && !completed) {
-      console.error(`⏰ Timeout após ${maxAttempts} tentativas`);
-      await ctx.reply('⚠️ Processamento demorou demais. Tente novamente.');
+      console.error(`⏰ Timeout após ${attempts} tentativas`);
+      await ctx.reply('⚠️ Processamento demorou demais.');
     }
 
   } catch (error) {
-    console.error('❌ Erro geral:', error);
+    console.error('❌ Erro geral:', error.message);
     await ctx.reply('⚠️ Erro temporário. Tente novamente.');
   }
 });
+
+// Graceful shutdown
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
 // Iniciar bot
 async function startBot() {
   try {
     console.log('🚀 Iniciando CAR Bot...');
     
-    // Verificar se as variáveis essenciais existem
+    // Verificar variáveis essenciais
     if (!process.env.TELEGRAM_TOKEN) {
       throw new Error('TELEGRAM_TOKEN não configurado');
     }
     if (!process.env.OPENAI_API_KEY) {
-      throw new Error('OPENAI_API_KEY não configurado');
+      throw new Error('OPENAI_API_KEY não configurado');  
     }
     if (!process.env.OPENAI_ASSISTANT_ID) {
       throw new Error('OPENAI_ASSISTANT_ID não configurado');
     }
     
-    console.log('✅ Variáveis de ambiente verificadas');
+    console.log('✅ Variáveis verificadas');
     
-    await bot.launch({ polling: true });
-    console.log('✅ CAR Bot ativo!');
+    await bot.launch({ 
+      polling: {
+        timeout: 10,
+        limit: 100
+      }
+    });
+    
+    console.log('✅ CAR Bot ATIVO!');
   } catch (error) {
-    console.error('❌ Erro ao iniciar bot:', error);
+    console.error('❌ Falha ao iniciar:', error.message);
     process.exit(1);
   }
 }
 
 startBot();
 
-// Para webhook (se precisar depois)
+// Para webhook futuro
 export const handler = bot.webhookCallback('/telegram');
 
 
