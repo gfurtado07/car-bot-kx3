@@ -1,6 +1,6 @@
 import { Telegraf } from 'telegraf';
 import OpenAI from 'openai';
-import { functionsRouter } from './functions.js';
+import functions from './functions.js'; // ✅ Import direto das functions
 import { uploadAttachments } from './storage.js';
 import { log } from './utils/logger.js';
 import dotenv from 'dotenv';
@@ -80,7 +80,7 @@ FUNCTIONS DISPONÍVEIS:
 bot.start(async (ctx) => {
   try {
     const context = getUserContext(ctx.from.id);
-    context.messages = context.messages.slice(0, 1); // Reset conversa, manter só system
+    context.messages = context.messages.slice(0, 1); // Reset conversa
     context.userInfo.nameCollected = false;
     context.userInfo.confirmingName = false;
     context.userInfo.pendingName = null;
@@ -103,50 +103,37 @@ bot.on('message', async (ctx) => {
 
     const context = getUserContext(ctx.from.id);
 
-    // Se nome não foi coletado, forçar coleta de nome
+    // Fluxo de coleta e confirmação de nome
     if (!context.userInfo.nameCollected) {
-      let messageContent = ctx.message.text || 'Arquivo enviado';
+      const messageContent = ctx.message.text?.trim();
 
       if (!context.userInfo.confirmingName) {
-        // Primeira vez perguntando o nome
-        context.userInfo.confirmingName = true;
+        // Primeira vez coletando
         context.userInfo.pendingName = messageContent;
-
+        context.userInfo.confirmingName = true;
         await ctx.reply(`Posso confirmar: seu nome é ${messageContent}? (Sim/Não)`);
         return;
       } else {
-        // Verificando confirmação de nome
-        if (messageContent.toLowerCase().includes('sim')) {
-          // Nome confirmado
-          const extractedName = context.userInfo.pendingName;
-          
-          // Chamar função para salvar nome
-          await functionsRouter(null, null, {
-            submit_tool_outputs: {
-              tool_calls: [{
-                id: 'name_confirmation',
-                function: {
-                  name: 'addUserName',
-                  arguments: JSON.stringify({
-                    telegram_id: ctx.from.id.toString(),
-                    full_name: extractedName
-                  })
-                }
-              }]
-            }
+        if (messageContent?.toLowerCase().includes('sim')) {
+          const nome = context.userInfo.pendingName;
+
+          // ✅ Chamada direta da função
+          await functions.addUserName({
+            telegram_id: ctx.from.id.toString(),
+            full_name: nome
           });
 
           context.userInfo.nameCollected = true;
           context.userInfo.confirmingName = false;
           context.userInfo.pendingName = null;
 
-          await ctx.reply(`Ótimo, ${extractedName}! Agora, por favor, me informe seu e-mail.`);
+          await ctx.reply(`Ótimo, ${nome}! Agora, por favor, me informe seu e-mail.`);
           return;
         } else {
-          // Nome não confirmado
+          // Resposta não foi "sim"
           context.userInfo.confirmingName = false;
           context.userInfo.pendingName = null;
-          await ctx.reply('Por favor, me diga novamente seu nome completo.');
+          await ctx.reply('Tudo bem! Por favor, me diga novamente seu nome completo.');
           return;
         }
       }
@@ -158,9 +145,9 @@ bot.on('message', async (ctx) => {
       attachmentLinks = await uploadAttachments(ctx);
     }
 
-    // Preparar conteúdo da mensagem
+    // Preparar mensagem do usuário
     let messageContent = ctx.message.text || 'Arquivo enviado';
-    
+
     if (attachmentLinks.length > 0) {
       messageContent += `\n\n[Anexos: ${attachmentLinks.map(a => a.name).join(', ')}]`;
     }
@@ -169,24 +156,21 @@ bot.on('message', async (ctx) => {
       messageContent += `\n\n[Áudio enviado - file_id: ${ctx.message.voice.file_id}]`;
     }
 
-    // Adicionar contexto do usuário
     messageContent += `\n\n[Telegram ID: ${ctx.from.id}]`;
 
-    // Adicionar mensagem à conversa
     context.messages.push({
       role: 'user',
       content: messageContent
     });
 
-    // Manter histórico limitado (últimas 10 mensagens + system)
-    if (context.messages.length > 21) { // 1 system + 20 mensagens
+    // Limitar histórico
+    if (context.messages.length > 21) {
       context.messages = [
-        context.messages[0], // manter system message
-        ...context.messages.slice(-20) // últimas 20
+        context.messages[0],
+        ...context.messages.slice(-20)
       ];
     }
 
-    // Chamar OpenAI Chat Completion
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: context.messages,
@@ -195,28 +179,25 @@ bot.on('message', async (ctx) => {
     });
 
     const assistantMessage = response.choices[0].message.content;
-    
-    // Adicionar resposta ao contexto
+
     context.messages.push({
       role: 'assistant',
       content: assistantMessage
     });
 
-    // Verificar se precisa executar alguma function
+    // Verifica se tem função no padrão [FUNCTION: nome(parametros)]
     const functionMatch = assistantMessage.match(/\[FUNCTION:\s*(\w+)\((.*?)\)\]/);
     if (functionMatch) {
       const [, functionName, params] = functionMatch;
       log(`Function solicitada: ${functionName}`, params);
-      
-      // Por enquanto, apenas lograr e responder
       await ctx.reply(`🤖 Entendi que preciso executar: ${functionName}\n\n${assistantMessage.replace(/\[FUNCTION:.*?\]/, '').trim()}`);
     } else {
       await ctx.reply(assistantMessage);
     }
-    
+
   } catch (error) {
     console.error('Erro no bot:', error);
-    
+
     if (error.status === 500) {
       await ctx.reply('O servidor está temporariamente indisponível. Tente novamente em alguns minutos.');
     } else if (error.status === 429) {
@@ -236,14 +217,14 @@ const launchOptions = {
   }
 };
 
-// Iniciar bot
+// Função de dev
 async function startBot() {
   try {
-    console.log('Iniciando bot com Chat Completions...');
+    console.log('Iniciando bot em modo DEV...');
     await bot.launch(launchOptions);
-    console.log('✅ Bot iniciado com sucesso!');
+    console.log('✅ Bot iniciado!');
   } catch (error) {
-    console.error('❌ Erro ao iniciar bot:', error.message);
+    console.error('❌ Erro ao iniciar bot:', error);
     process.exit(1);
   }
 }
@@ -252,12 +233,10 @@ async function startBot() {
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
-// Para Background Worker - sempre usar polling
+// Em produção
 async function startBotProduction() {
   try {
-    console.log('🚀 Iniciando bot em modo Background Worker...');
-    console.log('📡 Usando polling (não webhook)');
-    
+    console.log('🚀 Iniciando bot em produção...');
     await bot.launch({
       polling: {
         timeout: 10,
@@ -266,22 +245,18 @@ async function startBotProduction() {
         allowedUpdates: ['message', 'callback_query']
       }
     });
-    
-    console.log('✅ Bot iniciado com sucesso em produção!');
-    console.log('🤖 Modo: Polling ativo');
-    
+    console.log('🤖 Bot em produção via polling');
   } catch (error) {
-    console.error('❌ Erro ao iniciar bot:', error);
+    console.error('❌ Erro produção:', error);
     process.exit(1);
   }
 }
 
-// Iniciar baseado no ambiente
 if (process.env.NODE_ENV === 'production') {
   startBotProduction();
 } else {
-  startBot(); // Função de desenvolvimento
+  startBot();
 }
 
-// Export para compatibilidade (não usado em Background Worker)
+// Exportação padrão
 export const handler = bot.webhookCallback('/telegram');
