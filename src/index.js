@@ -37,7 +37,6 @@ bot.on('message', async (ctx) => {
     // 3. Criar thread COM DEBUG
     const thread = await openai.beta.threads.create();
     console.log(`🧵 Thread criada: ${thread.id}`);
-    console.log(`🔍 Debug Thread completo:`, JSON.stringify(thread, null, 2));
 
     // 4. Enviar mensagem ao thread
     await openai.beta.threads.messages.create(thread.id, {
@@ -53,7 +52,6 @@ bot.on('message', async (ctx) => {
       });
       
       console.log(`⚙️ Run criado: ${run.id}`);
-      console.log(`🔍 Debug Run completo:`, JSON.stringify(run, null, 2));
       
       if (!run || !run.id) {
         throw new Error('Run criado mas sem ID válido');
@@ -65,7 +63,7 @@ bot.on('message', async (ctx) => {
       return;
     }
 
-    // 6. Loop até completar COM DEBUG COMPLETO
+    // 6. Loop até completar COM NOVA ESTRATÉGIA
     let completed = false;
     let attempts = 0;
     const maxAttempts = 20;
@@ -74,16 +72,24 @@ bot.on('message', async (ctx) => {
       attempts++;
       
       try {
-        // ✅ CORREÇÃO COM DEBUG DETALHADO
         console.log(`🔍 Tentativa ${attempts} - Thread ID: ${thread.id}, Run ID: ${run.id}`);
-        console.log(`🔍 Tipos - Thread: ${typeof thread.id}, Run: ${typeof run.id}`);
         
-        const runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
-        console.log(`🔄 Status: ${runStatus.status} (tentativa ${attempts})`);
+        // Nova estratégia: listar todos os runs do thread
+        const runsList = await openai.beta.threads.runs.list(thread.id);
+        const currentRun = runsList.data.find(r => r.id === run.id);
         
-        if (runStatus.status === 'completed') {
+        console.log(`🔄 Status do Run: ${currentRun?.status}`);
+        
+        if (!currentRun) {
+          console.error('❌ Run não encontrado');
+          await ctx.reply('⚠️ Erro: Run não encontrado');
+          break;
+        }
+        
+        if (currentRun.status === 'completed') {
           const messages = await openai.beta.threads.messages.list(thread.id);
           const response = messages.data[0]?.content[0]?.text?.value;
+          
           if (response) {
             console.log(`💬 Resposta recebida (${response.length} chars)`);
             await ctx.reply(response);
@@ -93,18 +99,18 @@ bot.on('message', async (ctx) => {
           completed = true;
         }
         
-        else if (runStatus.status === 'requires_action') {
+        else if (currentRun.status === 'requires_action') {
           console.log(`⚙️ Executando function calls...`);
-          await functionsRouter(thread.id, run.id, runStatus.required_action);
+          await functionsRouter(thread.id, run.id, currentRun.required_action);
         }
         
-        else if (runStatus.status === 'failed') {
-          console.error(`❌ Run falhou:`, runStatus.last_error);
-          await ctx.reply(`⚠️ Erro: ${runStatus.last_error?.message || 'Falha no processamento'}`);
+        else if (currentRun.status === 'failed') {
+          console.error(`❌ Run falhou:`, currentRun.last_error);
+          await ctx.reply(`⚠️ Erro: ${currentRun.last_error?.message || 'Falha no processamento'}`);
           completed = true;
         }
         
-        else if (runStatus.status === 'expired') {
+        else if (currentRun.status === 'expired') {
           console.error(`⏰ Run expirou`);
           await ctx.reply('⚠️ Processamento expirou. Tente novamente.');
           completed = true;
@@ -135,10 +141,11 @@ bot.on('message', async (ctx) => {
   }
 });
 
-// Resto do código igual...
+// Graceful shutdown
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
+// Iniciar bot
 async function startBot() {
   try {
     console.log('🚀 Iniciando CAR Bot...');
@@ -171,4 +178,5 @@ async function startBot() {
 
 startBot();
 
+// Para webhook futuro
 export const handler = bot.webhookCallback('/telegram');
