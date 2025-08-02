@@ -14,7 +14,8 @@ const functions = {
   getTicketDetail,
   closeTicket,
   replyTicket,
-  transcribeAudio
+  transcribeAudio,
+  addUserName  // Nova function adicionada
 };
 
 export async function functionsRouter(threadId, runId, requiredAction) {
@@ -60,6 +61,30 @@ export async function functionsRouter(threadId, runId, requiredAction) {
 }
 
 // Implementação das functions
+
+async function addUserName({ telegram_id, full_name }) {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      UPDATE users 
+      SET name = $1 
+      WHERE telegram_id = $2
+    `, [full_name, telegram_id]);
+    
+    return { 
+      success: true, 
+      message: `Nome atualizado com sucesso: ${full_name}` 
+    };
+  } catch (error) {
+    logError(error, 'Erro ao atualizar nome do usuário');
+    return {
+      success: false,
+      message: 'Erro ao atualizar nome'
+    };
+  } finally {
+    client.release();
+  }
+}
 
 async function addUserEmail({ telegram_id, email }) {
   const client = await pool.connect();
@@ -286,3 +311,6 @@ async function transcribeAudio({ file_id }) {
     transcription: '[Transcrição de áudio não implementada ainda]' 
   };
 }
+
+export default functions;
+
