@@ -20,42 +20,57 @@ function getUserContext(userId) {
           role: 'system',
           content: `Você é o CAR, bot de atendimento aos representantes comerciais da KX3.
 
-TAREFAS PRINCIPAIS:
-1. Cumprimentar e coletar e-mail na primeira interação
-2. Exibir menu principal:
+REGRAS CRÍTICAS DE INTERAÇÃO:
+1. NO PRIMEIRO CONTATO (/start):
+   - SEMPRE pergunte o nome completo
+   - NÃO prossiga sem ter o nome confirmado
+   - Use addUserName APENAS após confirmação explícita
+   - Se não confirmar, continue pedindo
+
+2. Após confirmação do nome:
+   - Cumprimentar pelo nome correto
+   - Coletar e-mail na sequência (chame addUserEmail)
+
+3. TAREFAS PRINCIPAIS:
    - Abrir novo chamado
    - Consultar chamados em aberto  
    - Pesquisar chamado específico
    - Alterar meu e-mail
 
-3. Para novo chamado:
-   - Mostrar lista de departamentos
-   - Solicitar assunto e descrição
-   - Perguntar sobre anexos
-   - Gerar resumo e pedir confirmação
+EXEMPLOS DE FLUXO:
+- Usuário: /start
+- Bot: "Olá! Para começarmos, qual é seu nome completo?"
+- Usuário: "Guilherme Furtado"
+- Bot: "Posso confirmar: seu nome é Guilherme Furtado? (Sim/Não)"
+- Se Sim: Registra com addUserName
+- Se Não: "Por favor, me diga novamente seu nome completo"
 
 COMPORTAMENTO:
 - Seja cordial, profissional e eficiente
+- Sempre confirme dados antes de criar chamados
 - Use emojis moderadamente
 - Mantenha conversas focadas no atendimento
-- Sempre confirme dados antes de executar ações
+
+ESTADO INICIAL:
+- Nome do usuário: NÃO COLETADO
+- Próxima ação: COLETAR NOME
 
 FUNCTIONS DISPONÍVEIS:
-Quando necessário, indique qual function deve ser chamada no formato:
-[FUNCTION: nome_da_function(parametros)]
-
-Functions disponíveis:
+- addUserName(telegram_id, full_name)
 - addUserEmail(telegram_id, email)
 - getDepartments()
-- openTicket(telegram_id, department, subject, description, attachments)
-- listTickets(telegram_id)
-- getTicketDetail(protocol)
-- closeTicket(protocol)
-
-Por enquanto, simule as respostas dessas functions.`
+- openTicket(...)
+- listTickets(...)
+- getTicketDetail(...)
+- closeTicket(...)
+`
         }
       ],
-      userInfo: null
+      userInfo: {
+        nameCollected: false,
+        confirmingName: false,
+        pendingName: null
+      }
     });
   }
   return userContexts.get(userId);
@@ -66,7 +81,11 @@ bot.start(async (ctx) => {
   try {
     const context = getUserContext(ctx.from.id);
     context.messages = context.messages.slice(0, 1); // Reset conversa, manter só system
-    await ctx.reply('Olá! Sou o CAR, seu assistente de atendimento da KX3. Como posso ajudá-lo hoje?');
+    context.userInfo.nameCollected = false;
+    context.userInfo.confirmingName = false;
+    context.userInfo.pendingName = null;
+
+    await ctx.reply('Olá! Para começarmos, qual é seu nome completo?');
   } catch (error) {
     console.error('Erro no /start:', error);
   }
@@ -83,6 +102,55 @@ bot.on('message', async (ctx) => {
     });
 
     const context = getUserContext(ctx.from.id);
+
+    // Se nome não foi coletado, forçar coleta de nome
+    if (!context.userInfo.nameCollected) {
+      let messageContent = ctx.message.text || 'Arquivo enviado';
+
+      if (!context.userInfo.confirmingName) {
+        // Primeira vez perguntando o nome
+        context.userInfo.confirmingName = true;
+        context.userInfo.pendingName = messageContent;
+
+        await ctx.reply(`Posso confirmar: seu nome é ${messageContent}? (Sim/Não)`);
+        return;
+      } else {
+        // Verificando confirmação de nome
+        if (messageContent.toLowerCase().includes('sim')) {
+          // Nome confirmado
+          const extractedName = context.userInfo.pendingName;
+          
+          // Chamar função para salvar nome
+          await functionsRouter(null, null, {
+            submit_tool_outputs: {
+              tool_calls: [{
+                id: 'name_confirmation',
+                function: {
+                  name: 'addUserName',
+                  arguments: JSON.stringify({
+                    telegram_id: ctx.from.id.toString(),
+                    full_name: extractedName
+                  })
+                }
+              }]
+            }
+          });
+
+          context.userInfo.nameCollected = true;
+          context.userInfo.confirmingName = false;
+          context.userInfo.pendingName = null;
+
+          await ctx.reply(`Ótimo, ${extractedName}! Agora, por favor, me informe seu e-mail.`);
+          return;
+        } else {
+          // Nome não confirmado
+          context.userInfo.confirmingName = false;
+          context.userInfo.pendingName = null;
+          await ctx.reply('Por favor, me diga novamente seu nome completo.');
+          return;
+        }
+      }
+    }
 
     // Processar anexos
     let attachmentLinks = [];
@@ -140,7 +208,7 @@ bot.on('message', async (ctx) => {
       const [, functionName, params] = functionMatch;
       log(`Function solicitada: ${functionName}`, params);
       
-      // Por enquanto, apenas loggar e responder
+      // Por enquanto, apenas lograr e responder
       await ctx.reply(`🤖 Entendi que preciso executar: ${functionName}\n\n${assistantMessage.replace(/\[FUNCTION:.*?\]/, '').trim()}`);
     } else {
       await ctx.reply(assistantMessage);
