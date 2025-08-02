@@ -184,26 +184,36 @@ async function startBot() {
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
-// Iniciar em desenvolvimento
-if (process.env.NODE_ENV !== 'production') {
-  startBot();
-}
-
-// Para produção - iniciar servidor HTTP com webhook
-if (process.env.NODE_ENV === 'production') {
-  import('express').then(({ default: express }) => {
-    const app = express();
-    app.use(express.json());
-    app.post('/telegram', bot.webhookCallback('/telegram'));
-    app.get('/', (req, res) => res.send('CAR Bot está rodando! 🤖'));
+// Para Background Worker - sempre usar polling
+async function startBotProduction() {
+  try {
+    console.log('🚀 Iniciando bot em modo Background Worker...');
+    console.log('📡 Usando polling (não webhook)');
     
-    const PORT = process.env.PORT || 3000;
-    app.listen(PORT, () => {
-      console.log(`✅ Servidor rodando na porta ${PORT}`);
-      console.log(`🤖 Bot configurado para receber webhooks em /telegram`);
+    await bot.launch({
+      polling: {
+        timeout: 10,
+        limit: 100,
+        retryAfter: 1,
+        allowedUpdates: ['message', 'callback_query']
+      }
     });
-  });
+    
+    console.log('✅ Bot iniciado com sucesso em produção!');
+    console.log('🤖 Modo: Polling ativo');
+    
+  } catch (error) {
+    console.error('❌ Erro ao iniciar bot:', error);
+    process.exit(1);
+  }
 }
 
-export const handler = bot.webhookCallback('/telegram');
+// Iniciar baseado no ambiente
+if (process.env.NODE_ENV === 'production') {
+  startBotProduction();
+} else {
+  startBot(); // Função de desenvolvimento
+}
 
+// Export para compatibilidade (não usado em Background Worker)
+export const handler = bot.webhookCallback('/telegram');
