@@ -31,6 +31,10 @@ bot.on('message', async (ctx) => {
       attachmentLinks = await uploadAttachments(ctx);
     }
 
+    if (ctx.message.voice) {
+      ctx.state.file_id = ctx.message.voice.file_id;
+    }
+
     const telegramName = `${ctx.from.first_name} ${ctx.from.last_name || ''}`.trim();
     const messageContent = ctx.message.text || 'Arquivo enviado';
 
@@ -44,25 +48,26 @@ bot.on('message', async (ctx) => {
       return;
     }
 
-    // Criar estrutura da mensagem convencional
+    // Montar payload da mensagem
     const payload = {
       role: 'user',
-      content: messageContent
+      content: messageContent,
+      metadata: {
+        telegram_id: ctx.from.id?.toString(),
+        telegram_name: telegramName
+      }
     };
 
-    const metadata = {
-      telegram_id: ctx.from.id?.toString(),
-      telegram_name: telegramName
-    };
-    if (ctx.message.voice?.file_id) {
-      metadata.file_id = ctx.message.voice.file_id;
+    // Dados adicionais (áudio e anexos)
+    if (ctx.state.file_id) {
+      payload.metadata.file_id = ctx.state.file_id;
     }
-    payload.metadata = metadata;
 
     if (attachmentLinks.length > 0) {
       payload.attachments = attachmentLinks;
     }
 
+    // Enviar mensagem ao Assistant
     try {
       await openai.beta.threads.messages.create(thread.id, payload);
     } catch (err) {
@@ -71,12 +76,11 @@ bot.on('message', async (ctx) => {
       return;
     }
 
-    // Executar Assistente
+    // Criar execução Run
     let run;
     try {
       run = await openai.beta.threads.runs.create(thread.id, {
         assistant_id: process.env.OPENAI_ASSISTANT_ID
-        // Não defina tools aqui, pois já estão registradas no painel do Assistant
       });
     } catch (err) {
       console.error('❌ Erro ao iniciar execução (run):', {
@@ -84,11 +88,18 @@ bot.on('message', async (ctx) => {
         status: err.status,
         body: err.response?.data || '[sem corpo de resposta]'
       });
-      await ctx.reply('⚠️ Não consegui ativar minha inteligência. Tente novamente em instantes.');
+      await ctx.reply('⚠️ Não consegui ativar minha inteligência. Tente novamente.');
       return;
     }
 
-    // Loop de progresso
+    // Evita erro de run indefinido
+    if (!run?.id) {
+      console.error('❌ Erro crítico: run.id está undefined');
+      await ctx.reply('⚠️ Falha ao comunicar com o assistente. Tente novamente mais tarde.');
+      return;
+    }
+
+    // Loop: aguardar conclusão / ação
     let completed = false;
     let lastResponse = null;
 
@@ -106,8 +117,8 @@ bot.on('message', async (ctx) => {
           console.log(`⚙️ Executando função solicitada: ${status.required_action?.function_call?.name}`);
           await functionsRouter(thread.id, run.id, status.required_action);
         } catch (err) {
-          console.error('❌ Erro ao executar função do Assistant:', err);
-          await ctx.reply('❌ Houve um erro ao completar sua solicitação. Tente novamente.');
+          console.error('❌ Erro na function call:', err);
+          await ctx.reply('⚠️ Erro ao completar sua solicitação. Tente novamente.');
           return;
         }
       }
@@ -115,6 +126,7 @@ bot.on('message', async (ctx) => {
       await new Promise((res) => setTimeout(res, 600));
     }
 
+    // Resposta final ao usuário
     if (lastResponse) {
       const replyText = lastResponse.content?.[0]?.text?.value || '[Resposta vazia do assistente]';
       await ctx.reply(replyText);
@@ -124,16 +136,16 @@ bot.on('message', async (ctx) => {
     console.error('❌ Erro geral no processamento:', error);
 
     if (error.status === 500) {
-      await ctx.reply('⚠️ O servidor está indisponível. Tente novamente daqui a alguns minutos.');
+      await ctx.reply('⚠️ O servidor está indisponível. Tente novamente em breve.');
     } else if (error.status === 429) {
-      await ctx.reply('⚠️ Muitas requisições em sequência. Aguarde um pouco.');
+      await ctx.reply('⚠️ Muitas requisições. Aguarde um momento.');
     } else {
-      await ctx.reply('❌ Erro inesperado. Tente novamente mais tarde.');
+      await ctx.reply('❌ Erro inesperado. Tente mais tarde.');
     }
   }
 });
 
-// Opções de polling
+// Configuração de lançamento com polling
 const launchOptions = {
   polling: {
     timeout: 10,
@@ -155,7 +167,8 @@ async function startBot() {
 
 startBot();
 
-// Export opcional se for usar webhook
+// Export se usar webhook (não usado em polling)
 export const handler = bot.webhookCallback('/telegram');
+
 
 
