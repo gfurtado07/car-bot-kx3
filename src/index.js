@@ -34,9 +34,10 @@ bot.on('message', async (ctx) => {
 
     console.log(`🤖 Enviando para Agent:`, messageData);
 
-    // 3. Criar thread
+    // 3. Criar thread COM DEBUG
     const thread = await openai.beta.threads.create();
     console.log(`🧵 Thread criada: ${thread.id}`);
+    console.log(`🔍 Debug Thread completo:`, JSON.stringify(thread, null, 2));
 
     // 4. Enviar mensagem ao thread
     await openai.beta.threads.messages.create(thread.id, {
@@ -44,25 +45,27 @@ bot.on('message', async (ctx) => {
       content: JSON.stringify(messageData)
     });
 
-    // 5. Criar run (com verificação de erro)
+    // 5. Criar run COM DEBUG
     let run;
     try {
       run = await openai.beta.threads.runs.create(thread.id, {
         assistant_id: process.env.OPENAI_ASSISTANT_ID
       });
       
+      console.log(`⚙️ Run criado: ${run.id}`);
+      console.log(`🔍 Debug Run completo:`, JSON.stringify(run, null, 2));
+      
       if (!run || !run.id) {
         throw new Error('Run criado mas sem ID válido');
       }
       
-      console.log(`⚙️ Run criado: ${run.id}`);
     } catch (runError) {
       console.error('❌ Erro ao criar run:', runError);
       await ctx.reply('⚠️ Erro ao ativar assistente. Verifique configurações.');
       return;
     }
 
-    // 6. Loop até completar - BUGS CORRIGIDOS!
+    // 6. Loop até completar COM DEBUG COMPLETO
     let completed = false;
     let attempts = 0;
     const maxAttempts = 20;
@@ -71,7 +74,10 @@ bot.on('message', async (ctx) => {
       attempts++;
       
       try {
-        // ✅ CORREÇÃO 1: Usar 'runStatus' em vez de 'status'
+        // ✅ CORREÇÃO COM DEBUG DETALHADO
+        console.log(`🔍 Tentativa ${attempts} - Thread ID: ${thread.id}, Run ID: ${run.id}`);
+        console.log(`🔍 Tipos - Thread: ${typeof thread.id}, Run: ${typeof run.id}`);
+        
         const runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
         console.log(`🔄 Status: ${runStatus.status} (tentativa ${attempts})`);
         
@@ -89,7 +95,6 @@ bot.on('message', async (ctx) => {
         
         else if (runStatus.status === 'requires_action') {
           console.log(`⚙️ Executando function calls...`);
-          // ✅ CORREÇÃO 2: Usar 'runStatus' e executar functionsRouter
           await functionsRouter(thread.id, run.id, runStatus.required_action);
         }
         
@@ -106,7 +111,8 @@ bot.on('message', async (ctx) => {
         }
         
       } catch (statusError) {
-        console.error(`❌ Erro ao verificar status:`, statusError.message);
+        console.error(`❌ Erro ao verificar status:`, statusError);
+        console.error(`❌ Stack trace:`, statusError.stack);
         await ctx.reply('⚠️ Erro no processamento. Tente novamente.');
         completed = true;
         break;
@@ -123,21 +129,20 @@ bot.on('message', async (ctx) => {
     }
 
   } catch (error) {
-    console.error('❌ Erro geral:', error.message);
+    console.error('❌ Erro geral:', error);
+    console.error('❌ Stack trace geral:', error.stack);
     await ctx.reply('⚠️ Erro temporário. Tente novamente.');
   }
 });
 
-// Graceful shutdown
+// Resto do código igual...
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
-// Iniciar bot
 async function startBot() {
   try {
     console.log('🚀 Iniciando CAR Bot...');
     
-    // Verificar variáveis essenciais
     if (!process.env.TELEGRAM_TOKEN) {
       throw new Error('TELEGRAM_TOKEN não configurado');
     }
@@ -166,5 +171,4 @@ async function startBot() {
 
 startBot();
 
-// Para webhook futuro
 export const handler = bot.webhookCallback('/telegram');
