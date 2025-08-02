@@ -56,7 +56,7 @@ bot.on('message', async (ctx) => {
       attachments: attachmentLinks || []
     });
 
-    // Iniciar rodagem do assistant
+    // Iniciar execução com Assistant
     let run;
     try {
       run = await openai.beta.threads.runs.create(thread.id, {
@@ -65,12 +65,16 @@ bot.on('message', async (ctx) => {
         model: 'gpt-4o-mini'
       });
     } catch (err) {
-      console.error('❌ Erro ao iniciar run com OpenAI:', err);
-      await ctx.reply('⚠️ Erro ao processar com a inteligência do bot. Tente novamente daqui a pouco.');
+      console.error('❌ Erro ao iniciar run com OpenAI:', {
+        message: err.message,
+        status: err.status,
+        body: err.response?.data || '[sem corpo de resposta]'
+      });
+      await ctx.reply('⚠️ Erro ao conectar com a inteligência do bot. Verificamos o sistema e retornamos em instantes.');
       return;
     }
 
-    // Processamento do run
+    // Verificador de andamento
     let completed = false;
     let lastResponse = null;
 
@@ -85,11 +89,11 @@ bot.on('message', async (ctx) => {
 
       if (status.status === 'requires_action') {
         try {
-          console.log(`⚙️ Executando função: ${status.required_action?.function_call?.name}`);
+          console.log(`⚙️ Executando função solicitada: ${status.required_action?.function_call?.name}`);
           await functionsRouter(thread.id, run.id, status.required_action);
         } catch (err) {
           console.error('❌ Erro ao executar função chamada pelo Assistant:', err);
-          await ctx.reply('❌ Ocorreu um erro interno ao processar sua solicitação. Nossa equipe já foi notificada.');
+          await ctx.reply('❌ Houve um erro ao responder seu pedido. Por favor, tente novamente.');
           return;
         }
       }
@@ -97,26 +101,26 @@ bot.on('message', async (ctx) => {
       await new Promise((res) => setTimeout(res, 600));
     }
 
-    // Enviar resposta final para o usuário
+    // Enviar a resposta final para o usuário
     if (lastResponse) {
       const replyText = lastResponse.content?.[0]?.text?.value || '[Resposta vazia do assistente]';
       await ctx.reply(replyText);
     }
 
   } catch (error) {
-    console.error('❌ Erro inesperado geral:', error);
+    console.error('❌ Erro geral no processamento:', error);
 
     if (error.status === 500) {
-      await ctx.reply('⚠️ O servidor está temporariamente indisponível. Tente novamente em alguns minutos.');
+      await ctx.reply('⚠️ O servidor está indisponível. Tente novamente daqui a alguns minutos.');
     } else if (error.status === 429) {
-      await ctx.reply('⚠️ Muitas requisições em pouco tempo. Aguarde alguns segundos e tente de novo.');
+      await ctx.reply('⚠️ Muitas requisições em sequência. Aguarde um pouco.');
     } else {
-      await ctx.reply('❌ Desculpe, ocorreu um erro inesperado. Tente novamente.');
+      await ctx.reply('❌ Erro inesperado. Tente novamente mais tarde.');
     }
   }
 });
 
-// Polling ativo por padrão
+// Opções para polling ao invés de webhook
 const launchOptions = {
   polling: {
     timeout: 10,
@@ -138,6 +142,7 @@ async function startBot() {
 
 startBot();
 
-// Exporta webhook opcional
+// Exporta para uso com webhook, se necessário
 export const handler = bot.webhookCallback('/telegram');
+
 
