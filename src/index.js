@@ -72,8 +72,7 @@ await openai.beta.threads.messages.create(thread.id, payload);
     let run;
     try {
       run = await openai.beta.threads.runs.create(thread.id, {
-        assistant_id: process.env.OPENAI_ASSISTANT_ID,
-        tools: [{ type: 'function' }]
+        assistant_id: process.env.OPENAI_ASSISTANT_ID
       });
     } catch (err) {
       console.error('❌ Erro ao iniciar run com OpenAI:', {
